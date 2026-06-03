@@ -1,4 +1,4 @@
-hopsworks>=3.4.3
+hopsworks[python]>=3.4.3
 requests>=2.31.0
 pandas>=2.2.1
 numpy>=1.26.4
