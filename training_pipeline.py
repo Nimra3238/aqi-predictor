@@ -5,10 +5,10 @@ from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import Ridge
 from xgboost import XGBRegressor
-from sklearn.metrics import mean_absolute_error, mean_squared_error, root_mean_squared_error, r2_score
+from sklearn.metrics import mean_absolute_error, root_mean_squared_error, r2_score
 import joblib
 import os
-from src.config import HOPSWORKS_API_KEY, FEATURE_GROUP_NAME, MODEL_NAME
+from src.config import HOPSWORKS_API_KEY, FEATURE_GROUP_NAME
 
 def train_and_register():
     print("🔌 Connecting to Hopsworks Project...")
@@ -29,86 +29,109 @@ def train_and_register():
     elif 'date' in df.columns:
         df = df.sort_values('date')
 
-    # 3. Target Generation: Compute the 3-day (72 steps) future prediction target
-    if 'target_aqi_3d' not in df.columns:
-        print("🔮 Generating 3-day future targets (target_aqi_3d) from historical trends...")
-        base_aqi_col = 'aqi' if 'aqi' in df.columns else 'aqi_rolling_24h'
-        df['target_aqi_3d'] = df[base_aqi_col].shift(-72)
-        df = df.dropna(subset=['target_aqi_3d'])
+    # Base column to look back on for generation shifts
+    base_aqi_col = 'aqi' if 'aqi' in df.columns else 'aqi_rolling_24h'
 
-    # 4. Splitting into features (X) and target label (y)
-    drop_cols = ['timestamp', 'date', 'target_aqi_3d']
-    X = df.drop(columns=[col for col in drop_cols if col in df.columns])
-    y = df['target_aqi_3d']
+    # Define the 3 separate daily targets we need to generate predictions for
+    # Day 1 = 24 hours ahead (-24), Day 2 = 48 hours ahead (-48), Day 3 = 72 hours ahead (-72)
+    target_horizons = {1: -24, 2: -48, 3: -72}
     
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    print(f"📊 Training shape: {X_train.shape} | Evaluation shape: {X_test.shape}")
-    
-    # --- TOURNAMENT STAGE (TRAINING 3 MODELS) ---
-    
-    # Model 1: Ridge Regression
-    print("🏋️ Training Model 1: Ridge Regression (Baseline)...")
-    lr = Ridge()
-    lr.fit(X_train, y_train)
-    lr_preds = lr.predict(X_test)
-    lr_mae = mean_absolute_error(y_test, lr_preds)
-    lr_rmse = root_mean_squared_error(y_test, lr_preds)
-    lr_r2 = r2_score(y_test, lr_preds)
-    
-    # Model 2: Random Forest
-    print("🏋️ Training Model 2: Random Forest Regressor (Ensemble)...")
-    rf = RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42)
-    rf.fit(X_train, y_train)
-    rf_preds = rf.predict(X_test)
-    rf_mae = mean_absolute_error(y_test, rf_preds)
-    rf_rmse = root_mean_squared_error(y_test, rf_preds)
-    rf_r2 = r2_score(y_test, rf_preds)
-    
-    # Model 3: XGBoost Regressor
-    print("🏋️ Training Model 3: XGBoost Regressor (Advanced Boosting)...")
-    xgb = XGBRegressor(n_estimators=100, max_depth=6, learning_rate=0.1, random_state=42)
-    xgb.fit(X_train, y_train)
-    xgb_preds = xgb.predict(X_test)
-    xgb_mae = mean_absolute_error(y_test, xgb_preds)
-    xgb_rmse = root_mean_squared_error(y_test, xgb_preds)
-    xgb_r2 = r2_score(y_test, xgb_preds)
-    
-    print("\n================ SYSTEM TOURNAMENT PERFORMANCE ================")
-    print(f" 1. Ridge Baseline   -> MAE: {lr_mae:.2f} | RMSE: {lr_rmse:.2f} | R²: {lr_r2:.2f}")
-    print(f" 2. Random Forest    -> MAE: {rf_mae:.2f} | RMSE: {rf_rmse:.2f} | R²: {rf_r2:.2f}")
-    print(f" 3. XGBoost Boosting -> MAE: {xgb_mae:.2f} | RMSE: {xgb_rmse:.2f} | R²: {xgb_r2:.2f}")
-    print("===============================================================\n")
-    
-    # 5. DYNAMIC SELECTION MAP: Compare all 3 MAE metrics and choose the absolute lowest
-    score_map = {
-        lr_mae: (lr, lr_mae, lr_rmse, lr_r2, "Baseline Ridge Regression model predicting Islamabad AQI 3 days out."),
-        rf_mae: (rf, rf_mae, rf_rmse, rf_r2, "Optimized Random Forest ensemble model predicting Islamabad AQI 3 days out."),
-        xgb_mae: (xgb, xgb_mae, xgb_rmse, xgb_r2, "Advanced XGBoost model predicting Islamabad AQI 3 days out.")
-    }
-    
-    best_mae = min(score_map.keys())
-    champion_model, champion_mae, champion_rmse, champion_r2, model_desc = score_map[best_mae]
-    
-    print(f"🏆 The Champion Model is selected based on best performance! Description: {model_desc}")
-    
-    # Save the local champion model artifact
+    # 3. Target Generation: Compute targets dynamically if they aren't in the feature group
+    for day, shift_steps in target_horizons.items():
+        target_col = f'target_aqi_{day}d'
+        if target_col not in df.columns:
+            print(f"🔮 Generating target for Day {day} ({abs(shift_steps)} steps ahead) from historical trends...")
+            df[target_col] = df[base_aqi_col].shift(shift_steps)
+            
+    # Drop rows that have missing values in any of our 3 targets due to the look-ahead shifting
+    all_target_cols = [f'target_aqi_{day}d' for day in target_horizons.keys()]
+    df = df.dropna(subset=all_target_cols)
+
+    # Make sure target output directory exists locally
     model_dir = "saved_model"
     os.makedirs(model_dir, exist_ok=True)
-    model_path = os.path.join(model_dir, "aqi_model.pkl")
-    joblib.dump(champion_model, model_path)
-    
-    # 6. REGISTRY: Push the tournament champion into Hopsworks Model Registry
-    print("🏆 Uploading champion model to central Model Registry...")
-    mr = project.get_model_registry()
-    model_meta = mr.python.create_model(
-        name=MODEL_NAME,
-        metrics={"mae": champion_mae, "rmse": champion_rmse, "r2": champion_r2},
-        description=model_desc
-    )
-    model_meta.save(model_path)
-    print("✅ Best model successfully registered and ready for tomorrow's dashboard!")
-    
-    return X_train, champion_model
+
+    # --- TOURNAMENT LOOP FOR EACH INDIVIDUAL DAY ---
+    for day, shift_steps in target_horizons.items():
+        target_col = f'target_aqi_{day}d'
+        print(f"\n===============================================================")
+        print(f"🏆 STARTING TOURNAMENT CHAMPIONSHIP FOR: DAY {day} FORECAST MATRIX")
+        print(f"===============================================================")
+        
+        # 4. Splitting features (X) and target label (y) specifically for this target loop
+        # We drop all structural metadata AND all other day target lines from the input features (X)
+        drop_cols = ['timestamp', 'date', 'target_aqi_1d', 'target_aqi_2d', 'target_aqi_3d']
+        X = df.drop(columns=[col for col in drop_cols if col in df.columns])
+        y = df[target_col]
+        
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        print(f"📊 Training shape: {X_train.shape} | Evaluation shape: {X_test.shape}")
+        
+        # Model 1: Ridge Regression
+        print(f"🏋️ Training Model 1: Ridge Regression (Baseline)...")
+        lr = Ridge()
+        lr.fit(X_train, y_train)
+        lr_preds = lr.predict(X_test)
+        lr_mae = mean_absolute_error(y_test, lr_preds)
+        lr_rmse = root_mean_squared_error(y_test, lr_preds)
+        lr_r2 = r2_score(y_test, lr_preds)
+        
+        # Model 2: Random Forest
+        print(f"🏋️ Training Model 2: Random Forest Regressor (Ensemble)...")
+        rf = RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42)
+        rf.fit(X_train, y_train)
+        rf_preds = rf.predict(X_test)
+        rf_mae = mean_absolute_error(y_test, rf_preds)
+        rf_rmse = root_mean_squared_error(y_test, rf_preds)
+        rf_r2 = r2_score(y_test, rf_preds)
+        
+        # Model 3: XGBoost Regressor
+        print(f"🏋️ Training Model 3: XGBoost Regressor (Advanced Boosting)...")
+        xgb = XGBRegressor(n_estimators=100, max_depth=6, learning_rate=0.1, random_state=42)
+        xgb.fit(X_train, y_train)
+        xgb_preds = xgb.predict(X_test)
+        xgb_mae = mean_absolute_error(y_test, xgb_preds)
+        xgb_rmse = root_mean_squared_error(y_test, xgb_preds)
+        xgb_r2 = r2_score(y_test, xgb_preds)
+        
+        print(f"\n📈 Tournament Standings for Day {day}:")
+        print(f" 1. Ridge Baseline   -> MAE: {lr_mae:.2f} | RMSE: {lr_rmse:.2f} | R²: {lr_r2:.2f}")
+        print(f" 2. Random Forest    -> MAE: {rf_mae:.2f} | RMSE: {rf_rmse:.2f} | R²: {rf_r2:.2f}")
+        print(f" 3. XGBoost Boosting -> MAE: {xgb_mae:.2f} | RMSE: {xgb_rmse:.2f} | R²: {xgb_r2:.2f}")
+        
+        # 5. DYNAMIC SELECTION MAP: Pick the absolute lowest calculated MAE for Day X
+        score_map = {
+            lr_mae: (lr, lr_mae, lr_rmse, lr_r2, f"Champion Ridge Regression model predicting Islamabad AQI {day} day(s) out."),
+            rf_mae: (rf, rf_mae, rf_rmse, rf_r2, f"Optimized Random Forest ensemble model predicting Islamabad AQI {day} day(s) out."),
+            xgb_mae: (xgb, xgb_mae, xgb_rmse, xgb_r2, f"Advanced XGBoost model predicting Islamabad AQI {day} day(s) out.")
+        }
+        
+        best_mae = min(score_map.keys())
+        champion_model, champion_mae, champion_rmse, champion_r2, model_desc = score_map[best_mae]
+        
+        print(f"🏆 Day {day} Tournament Winner Identified! Description: {model_desc}")
+        
+        # Save the local champion model artifact temporarily
+        model_filename = f"aqi_model_{day}d.pkl"
+        model_path = os.path.join(model_dir, model_filename)
+        joblib.dump(champion_model, model_path)
+        
+        # 6. REGISTRY: Push the unique day's champion into the Model Registry room
+        print(f"📤 Uploading Day {day} champion model to central Hopsworks Model Registry...")
+        mr = project.get_model_registry()
+        model_meta = mr.python.create_model(
+            name=f"aqi_model_{day}d",
+            metrics={"mae": champion_mae, "rmse": champion_rmse, "r2": champion_r2},
+            description=model_desc
+        )
+        model_meta.save(model_path)
+        print(f"✅ 'aqi_model_{day}d' successfully registered with dynamic real metrics!")
+        
+        # Clean up temporary local files
+        if os.path.exists(model_path):
+            os.remove(model_path)
+
+    print("\n🎉 Success! All 3 independent daily tournament champions are generated and logged in Hopsworks.")
 
 if __name__ == "__main__":
     train_and_register()
