@@ -98,13 +98,13 @@ with st.spinner("🔌 Establishing connections to remote feature stores and down
 #location_str = "Islamabad Center"
 
 #with col_meta1:
-   # st.metric(label="Current Air Quality (AQI Baseline)", value=f"{current_aqi:.1f}")
+# st.metric(label="Current Air Quality (AQI Baseline)", value=f"{current_aqi:.1f}")
 #with col_meta2:
-    #st.metric(label="PM2.5 Level (µg/m³)", value=f"{current_pm25:.1f}")
+#st.metric(label="PM2.5 Level (µg/m³)", value=f"{current_pm25:.1f}")
 #with col_meta3:
-   # st.metric(label="Observation Timestamp", value=obs_time)
+# st.metric(label="Observation Timestamp", value=obs_time)
 #with col_meta4:
-    #st.metric(label="Monitoring Location", value=location_str)
+#st.metric(label="Monitoring Location", value=location_str)
 
 st.markdown("---")
 st.subheader(" Multi-Day Look-Ahead Forecasting Matrix")
@@ -117,7 +117,11 @@ for day in [1, 2, 3]:
     else:
         predictions[day] = None
 
-col1, col2, col3 = st.columns(3)
+# Dynamically extract Today's Live AQI baseline from the incoming raw feature row
+current_aqi_live = float(raw_features['aqi'].values[0]) if 'aqi' in raw_features.columns else (float(raw_features['aqi_rolling_24h'].values[0]) if 'aqi_rolling_24h' in raw_features.columns else 0.0)
+
+# Created a 4-column layout row to cleanly embed Today's live tracking point
+col0, col1, col2, col3 = st.columns(4)
 today = datetime.date.today()
 
 def get_aqi_status(val):
@@ -125,6 +129,13 @@ def get_aqi_status(val):
     elif val <= 100: return "🟨 Moderate", "Acceptable Quality"
     elif val <= 150: return "🟧 Unhealthy for Sensitive Groups", "Action Advised"
     else: return "🔴 Unhealthy", "Active Health Hazard Warning Issued"
+
+with col0:
+    st.markdown(f"###  Today's AQI")
+    st.caption(f"Observed: {today.strftime('%A, %B %d')}")
+    st.metric(label="Live Baseline AQI Score", value=f"{current_aqi_live:.1f}")
+    status, health = get_aqi_status(current_aqi_live)
+    st.info(f"**Status:** {status}\n\n*{health}*")
 
 with col1:
     st.markdown(f"###  Day 1 AQI")

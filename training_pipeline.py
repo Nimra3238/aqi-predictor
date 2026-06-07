@@ -35,7 +35,8 @@ def train_and_register():
  
     target_horizons = {1: -24, 2: -48, 3: -72}
     
-    p
+    
+    
     for day, shift_steps in target_horizons.items():
         target_col = f'target_aqi_{day}d'
         if target_col not in df.columns:
