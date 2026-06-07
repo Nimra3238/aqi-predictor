@@ -19,43 +19,41 @@ def train_and_register():
     aqi_fg = fs.get_feature_group(name=FEATURE_GROUP_NAME, version=1)
     df = aqi_fg.read()
 
-    # 1. Normalize column names to lowercase
+    
     df.columns = df.columns.str.lower()
     print("📋 Features successfully pulled from Hopsworks!")
 
-    # 2. Sort chronologically by timestamp/date before making look-ahead shifts
+    
     if 'timestamp' in df.columns:
         df = df.sort_values('timestamp')
     elif 'date' in df.columns:
         df = df.sort_values('date')
 
-    # Base column to look back on for generation shifts
+    
     base_aqi_col = 'aqi' if 'aqi' in df.columns else 'aqi_rolling_24h'
 
-    # Define the 3 separate daily targets we need to generate predictions for
-    # Day 1 = 24 hours ahead (-24), Day 2 = 48 hours ahead (-48), Day 3 = 72 hours ahead (-72)
+ 
     target_horizons = {1: -24, 2: -48, 3: -72}
     
-    # 3. Target Generation: Compute targets dynamically if they aren't in the feature group
+    p
     for day, shift_steps in target_horizons.items():
         target_col = f'target_aqi_{day}d'
         if target_col not in df.columns:
             print(f"🔮 Generating target for Day {day} ({abs(shift_steps)} steps ahead) from historical trends...")
             df[target_col] = df[base_aqi_col].shift(shift_steps)
             
-    # Drop rows that have missing values in any of our 3 targets due to the look-ahead shifting
+    
     all_target_cols = [f'target_aqi_{day}d' for day in target_horizons.keys()]
     df = df.dropna(subset=all_target_cols)
 
-    # Make sure target output directory exists locally
+ 
     model_dir = "saved_model"
     os.makedirs(model_dir, exist_ok=True)
 
-    # --- TOURNAMENT LOOP FOR EACH INDIVIDUAL DAY ---
     for day, shift_steps in target_horizons.items():
         target_col = f'target_aqi_{day}d'
         print(f"\n===============================================================")
-        print(f"🏆 STARTING TOURNAMENT CHAMPIONSHIP FOR: DAY {day} FORECAST MATRIX")
+        print(f"  PICKING BEST MODEL FOR FORECAST MATRIX")
         print(f"===============================================================")
         
         # 4. Splitting features (X) and target label (y) specifically for this target loop
@@ -68,7 +66,7 @@ def train_and_register():
         print(f"📊 Training shape: {X_train.shape} | Evaluation shape: {X_test.shape}")
         
         # Model 1: Ridge Regression
-        print(f"🏋️ Training Model 1: Ridge Regression (Baseline)...")
+        print(f" Training Model 1: Ridge Regression (Baseline)...")
         lr = Ridge()
         lr.fit(X_train, y_train)
         lr_preds = lr.predict(X_test)
@@ -77,7 +75,7 @@ def train_and_register():
         lr_r2 = r2_score(y_test, lr_preds)
         
         # Model 2: Random Forest
-        print(f"🏋️ Training Model 2: Random Forest Regressor (Ensemble)...")
+        print(f" Training Model 2: Random Forest Regressor (Ensemble)...")
         rf = RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42)
         rf.fit(X_train, y_train)
         rf_preds = rf.predict(X_test)
@@ -86,7 +84,7 @@ def train_and_register():
         rf_r2 = r2_score(y_test, rf_preds)
         
         # Model 3: XGBoost Regressor
-        print(f"🏋️ Training Model 3: XGBoost Regressor (Advanced Boosting)...")
+        print(f" Training Model 3: XGBoost Regressor (Advanced Boosting)...")
         xgb = XGBRegressor(n_estimators=100, max_depth=6, learning_rate=0.1, random_state=42)
         xgb.fit(X_train, y_train)
         xgb_preds = xgb.predict(X_test)
@@ -94,24 +92,24 @@ def train_and_register():
         xgb_rmse = root_mean_squared_error(y_test, xgb_preds)
         xgb_r2 = r2_score(y_test, xgb_preds)
         
-        print(f"\n📈 Tournament Standings for Day {day}:")
+        print(f"\nDay {day}:")
         print(f" 1. Ridge Baseline   -> MAE: {lr_mae:.2f} | RMSE: {lr_rmse:.2f} | R²: {lr_r2:.2f}")
         print(f" 2. Random Forest    -> MAE: {rf_mae:.2f} | RMSE: {rf_rmse:.2f} | R²: {rf_r2:.2f}")
         print(f" 3. XGBoost Boosting -> MAE: {xgb_mae:.2f} | RMSE: {xgb_rmse:.2f} | R²: {xgb_r2:.2f}")
         
-        # 5. DYNAMIC SELECTION MAP: Pick the absolute lowest calculated MAE for Day X
+       
         score_map = {
-            lr_mae: (lr, lr_mae, lr_rmse, lr_r2, f"Champion Ridge Regression model predicting Islamabad AQI {day} day(s) out."),
-            rf_mae: (rf, rf_mae, rf_rmse, rf_r2, f"Optimized Random Forest ensemble model predicting Islamabad AQI {day} day(s) out."),
-            xgb_mae: (xgb, xgb_mae, xgb_rmse, xgb_r2, f"Advanced XGBoost model predicting Islamabad AQI {day} day(s) out.")
+            lr_mae: (lr, lr_mae, lr_rmse, lr_r2, f" Ridge Regression model predicting Islamabad AQI {day} day(s) out."),
+            rf_mae: (rf, rf_mae, rf_rmse, rf_r2, f" Random Forest ensemble model predicting Islamabad AQI {day} day(s) out."),
+            xgb_mae: (xgb, xgb_mae, xgb_rmse, xgb_r2, f" XGBoost model predicting Islamabad AQI {day} day(s) out.")
         }
         
         best_mae = min(score_map.keys())
         champion_model, champion_mae, champion_rmse, champion_r2, model_desc = score_map[best_mae]
         
-        print(f"🏆 Day {day} Tournament Winner Identified! Description: {model_desc}")
+        print(f"Day {day}  Description: {model_desc}")
         
-        # Save the local champion model artifact temporarily
+        
         model_filename = f"aqi_model_{day}d.pkl"
         model_path = os.path.join(model_dir, model_filename)
         joblib.dump(champion_model, model_path)
@@ -131,7 +129,7 @@ def train_and_register():
         if os.path.exists(model_path):
             os.remove(model_path)
 
-    print("\n🎉 Success! All 3 independent daily tournament champions are generated and logged in Hopsworks.")
+    print("\n Success! All 3 models are generated and logged in Hopsworks.")
 
 if __name__ == "__main__":
     train_and_register()
