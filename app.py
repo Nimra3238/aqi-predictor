@@ -133,7 +133,7 @@ def get_aqi_status(val):
 with col0:
     st.markdown(f"###  Today's AQI")
     st.caption(f"Observed: {today.strftime('%A, %B %d')}")
-    st.metric(label="Live Baseline AQI Score", value=f"{current_aqi_live:.1f}")
+    st.metric(label="Live AQI Score", value=f"{current_aqi_live:.1f}")
     status, health = get_aqi_status(current_aqi_live)
     st.info(f"**Status:** {status}\n\n*{health}*")
 
